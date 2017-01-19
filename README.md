@@ -1,0 +1,2 @@
+The gatekeeper service is responsible for enrolling new sign-ups to the system and issuing them an API key.  Once registered each request is sent with an
+API key it is checked against the gatekeeper redis instance to check whether the user is currently locked out from the system or not.
