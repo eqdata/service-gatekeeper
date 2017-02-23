@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/bradfitz/gomemcache/memcache"
 	"strings"
+	"time"
 )
 
 type AuthController struct {
@@ -59,13 +60,14 @@ func (c *AuthController) isClientAppAuthorised(user User) (bool, string) {
 		if err.Error() == "memcache: cache miss" {
 			// Validate the users API key
 			user.Requests += 1
+			user.ReleaseCacheAt = time.Now().Add((CACHE_TIME_IN_SECS * time.Second))
 
-			fmt.Println("Setting email: " + key + " in cache for: " + fmt.Sprint(CACHE_TIME_IN_SECS) + " seconds")
+			fmt.Println("Setting email: " + key + " in cache for: " + fmt.Sprint(CACHE_TIME_IN_SECS) + " seconds: ", fmt.Sprint(user.ReleaseCacheAt))
 			mc.Set(&memcache.Item{Key: key, Value: user.serialize(), Expiration: CACHE_TIME_IN_SECS})
 
 			if c.isValidAPIKey(user.APIKey, user.Email) {
 				user.ValidAPIKey = true
-				return true, "Added user: " + user.Email + " to memcached with key: " + user.APIKey + " they have " + fmt.Sprint(user.Requests) + "/" + fmt.Sprint(MAX_REQUESTS_BEFORE_LOCKOUT) + " requests remaining for the next 3 minutes"
+				return true, "Added user: " + user.Email + " to memcached with key: " + user.APIKey + " they have " + fmt.Sprint(user.Requests) + "/" + fmt.Sprint(MAX_REQUESTS_BEFORE_LOCKOUT) + " requests remaining for the next " + fmt.Sprint(CACHE_TIME_IN_SECS) + " seconds, the cache expires at: " + fmt.Sprint(user.ReleaseCacheAt)
 			} else {
 				return false, "User: " + user.APIKey + " provided an invalid combination of email/api key. They have been placed back into the cache for: " + fmt.Sprint(CACHE_TIME_IN_SECS) + " seconds and will be locked out after " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS - user.Requests) + " more failed attempts"
 			}
@@ -76,29 +78,33 @@ func (c *AuthController) isClientAppAuthorised(user User) (bool, string) {
 	} else {
 		newAPIKey := user.APIKey
 		user = user.deserialize(mcObj.Value)
-		expiresAt := mcObj.Expiration
+		expiresAt := user.ReleaseCacheAt.Unix() - time.Now().Unix()
+		//now := time.Now()
+		fmt.Println("Release time: ", user.ReleaseCacheAt.Unix())
+		fmt.Println("Current time: ", time.Now().Unix())
+		fmt.Println("TIME LEFT RIGHT NOW IS: ", expiresAt)
 
 		user.Requests += 1
 
 		if !user.ValidAPIKey && !c.isValidAPIKey(user.APIKey, user.Email) {
 			if user.Requests > MAX_INVALID_API_KEY_ATTEMPTS {
-				expires := expiresAt
 				if !user.SetLockedTimestamp {
-					expires = CACHE_LOCKOUT_TIME_IN_SECS/2
-				} else {
+					expiresAt = ((CACHE_LOCKOUT_TIME_IN_SECS/2))
+					user.ReleaseCacheAt = time.Now().Add((CACHE_LOCKOUT_TIME_IN_SECS/2) * time.Second)
 					user.SetLockedTimestamp = true
 				}
-				mc.Set(&memcache.Item{Key: key, Value: user.serialize(), Expiration: (expires)})
-				return false, "User: " + user.Email + " with key: " + user.APIKey + " has reached maximum invalid API key requests: " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS) + ", within the time-frame.  They are now locked out for " + fmt.Sprint(expires / 2) + " seconds"
+				fmt.Println("TIME IS: ", expiresAt)
+				mc.Set(&memcache.Item{Key: key, Value: user.serialize(), Expiration: int32(expiresAt)})
+				return false, "User: " + user.Email + " with key: " + user.APIKey + " has reached maximum invalid API key requests: " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS) + ", within the time-frame.  They are now locked out for " + fmt.Sprint(expiresAt) + " seconds"
 			} else if user.Requests > 0 {
-				expires := expiresAt
 				if !user.SetLockedTimestamp {
-					expires = CACHE_TIME_IN_SECS
-				} else {
+					expiresAt = (CACHE_TIME_IN_SECS)
+					user.ReleaseCacheAt = time.Now().Add((CACHE_LOCKOUT_TIME_IN_SECS/2) * time.Second)
 					user.SetLockedTimestamp = true
 				}
-				mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: expires})
-				return false, "User: " + user.APIKey + " provided an invalid combination of email/api key. They have been placed back into the cache for: " + fmt.Sprint(expires) + " seconds and will be locked out after " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS - user.Requests + 1) + " more failed attempts"
+				fmt.Println("TIME IS: ", expiresAt)
+				mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: int32(expiresAt)})
+				return false, "User: " + user.APIKey + " provided an invalid combination of email/api key. They have been placed back into the cache for: " + fmt.Sprint(expiresAt) + " seconds and will be locked out after " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS - user.Requests + 1) + " more failed attempts"
 			}
 		}
 
@@ -109,32 +115,32 @@ func (c *AuthController) isClientAppAuthorised(user User) (bool, string) {
 			if !c.isValidAPIKey(newAPIKey, user.Email) {
 				fmt.Println("It wasnt valid either")
 				user.ValidAPIKey = false
-				expires := expiresAt
 				if !user.SetLockedTimestamp {
-					expires = CACHE_TIME_IN_SECS
-				} else {
+					expiresAt = (CACHE_LOCKOUT_TIME_IN_SECS)
+					user.ReleaseCacheAt = time.Now().Add((CACHE_LOCKOUT_TIME_IN_SECS) * time.Second)
 					user.SetLockedTimestamp = true
 				}
-				mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: expires})
-				return false, "User: " + user.APIKey + " provided an invalid combination of email/api key. They have been placed back into the cache for: " + fmt.Sprint(expires) + " seconds and will be locked out after " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS - user.Requests + 1) + " more failed attempts"
+				fmt.Println("TIME IS: ", expiresAt)
+				mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: int32(expiresAt)})
+				return false, "User: " + user.APIKey + " provided an invalid combination of email/api key. They have been placed back into the cache for: " + fmt.Sprint(expiresAt) + " seconds and will be locked out after " + fmt.Sprint(MAX_INVALID_API_KEY_ATTEMPTS - user.Requests + 1) + " more failed attempts"
 			} else {
 				user.ValidAPIKey = true
 			}
 		}
 
 		if (user.Requests) > MAX_REQUESTS_BEFORE_LOCKOUT {
-			expires := expiresAt
 			if !user.SetLockedTimestamp {
-				expires = CACHE_LOCKOUT_TIME_IN_SECS
-			} else {
+				expiresAt = CACHE_LOCKOUT_TIME_IN_SECS
 				user.SetLockedTimestamp = true
+				user.ReleaseCacheAt = time.Now().Add(CACHE_LOCKOUT_TIME_IN_SECS * time.Second)
 			}
-			mc.Set(&memcache.Item{Key: key, Value: user.serialize(), Expiration: expires})
-			return false, "User: " + user.Email + " with key: " + user.APIKey + " has reached maximum requests of " + fmt.Sprint(MAX_REQUESTS_BEFORE_LOCKOUT) + ", within the time-frame.  They are now locked out for " + fmt.Sprint(expires) + " seconds"
+			fmt.Println("TIME IS: ", expiresAt)
+			mc.Set(&memcache.Item{Key: key, Value: user.serialize(), Expiration: int32(expiresAt)})
+			return false, "User: " + user.Email + " with key: " + user.APIKey + " has reached maximum requests of " + fmt.Sprint(MAX_REQUESTS_BEFORE_LOCKOUT) + ", within the time-frame.  They are now locked out for " + fmt.Sprint(expiresAt) + " seconds"
 		}
 
 		user.SetLockedTimestamp = false
-		mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: expiresAt})
+		mc.Replace(&memcache.Item{Key: key, Value: user.serialize(), Expiration: int32(expiresAt)})
 		return true, "Incremented user: " + user.Email + " with key: " + user.APIKey + " attempts to: " + fmt.Sprint(user.Requests) + ", there are " + fmt.Sprint(expiresAt) + " seconds left until this cache entry expires."
 	}
 }

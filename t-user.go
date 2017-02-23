@@ -3,15 +3,17 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 type User struct {
 	Email string
 	APIKey string
 	Requests int32
-	TimesLocketOut int32
+	TimesLockedOut int32
 	ValidAPIKey bool
 	SetLockedTimestamp bool
+	ReleaseCacheAt time.Time
 }
 
 func (u *User) serialize() []byte {

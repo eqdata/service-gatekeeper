@@ -21,7 +21,7 @@ var routes = Routes {
 	},
 	Route {
 		"Authorise User",
-		"GET",
+		"GET", // Maybe refactor this to POST so logs dont expose keys/emails
 		"/auth",
 		AC.authorise,
 	},
